@@ -1,0 +1,156 @@
+{
+  "name": "Ai email assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        320,
+        -208
+      ],
+      "id": "825bbe6e-1232-459f-80c1-e2eba8d9b94d",
+      "name": "When chat message received",
+      "webhookId": "f46fc7c5-c4f0-4edc-bcfe-ddfd7823ed48"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "You are a helpful email assistant, which helps craft effective and succinct email based on user's instructions. You also help with sending email by using the attached Send Email Tool, when asked."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        608,
+        -208
+      ],
+      "id": "8c30465f-41e0-4ac5-b785-31000412c9b5",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "gemma4:e2b-it-qat",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        528,
+        16
+      ],
+      "id": "8acadf1f-1fc7-4226-ba15-9d6a21016c3f",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "a8LWVLJfRYURg9Jw",
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        672,
+        16
+      ],
+      "id": "471c49ab-2655-4d05-9a2e-4465c5b1fbfe",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "fromEmail": "gemma@gmail.com",
+        "toEmail": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('To_Email', ``, 'string') }}",
+        "subject": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Subject', ``, 'string') }}",
+        "emailFormat": "text",
+        "text": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Text', `Use this tool to send emails.\n\nEmail body requirements:\n\n* Write a complete, polished email.\n* Never include unfinished placeholders such as \\`[Your Name]\\`, \\`[Company Name]\\`, \\`[Recipient Name]\\`, or similar.\n* Do not invent the sender's name, company, job title, phone number, or other personal details.\n* If the sender's name is not provided, either:\n\n  * omit the signature entirely, or\n  * use a neutral sign-off such as \\`Best regards\\` without adding a name.\n* Make sure the email does not look like a draft or template.\n* Match the tone and language requested by the user.\n* Preserve all important details provided by the user.\n\nIMPORTANT:\nAfter the tool completes successfully, you MUST continue the conversation and send a normal chat response confirming the result.\n\nNever finish your turn immediately after calling this tool.\nNever return an empty response.\nDo not repeat the full email unless the user asks to see it.\n\nExample confirmation:\n\"The email has been sent successfully to [catlover@gmail.com](mailto:catlover@gmail.com).\"\n`, 'string') }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSendTool",
+      "typeVersion": 2.1,
+      "position": [
+        800,
+        16
+      ],
+      "id": "95adc401-480a-4c69-ba54-42b69f0e0fe1",
+      "name": "Send an Email",
+      "webhookId": "438f3751-5ac7-42c2-bba1-c99080a4be61",
+      "credentials": {
+        "smtp": {
+          "id": "YnN22zl9muZHMY18",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "0785c3c4-1d53-4ef3-b175-1834e1d707e8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "515c562cc95ce0be72c2644780effa63717402a73f20a15a16e0f26040a5f7a9"
+  },
+  "nodeGroups": [],
+  "id": "5dz3k5RvdCue6fVl",
+  "tags": []
+}
