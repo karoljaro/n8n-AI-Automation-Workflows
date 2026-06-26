@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -u
+
+DEFAULT_WEBHOOK_URL="http://localhost:5678/webhook-test/8ca8a4a1-1310-4d09-bf5d-c9719909a943"
+WEBHOOK_URL="${1:-${WEBHOOK_URL:-$DEFAULT_WEBHOOK_URL}}"
+EXPECTED_STATUS=422
+
+if ! command -v curl >/dev/null 2>&1; then
+  echo "Error: curl is not installed." >&2
+  exit 127
+fi
+
+if [[ ! "$WEBHOOK_URL" =~ ^https?:// ]]; then
+  echo "Error: invalid webhook URL: $WEBHOOK_URL" >&2
+  echo "Usage: $0 [WEBHOOK_URL]" >&2
+  exit 2
+fi
+
+pretty_print_json() {
+  local file="$1"
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" <<'PY' 2>/dev/null || cat "$file"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as file:
+    data = json.load(file)
+
+print(json.dumps(data, ensure_ascii=False, indent=4))
+PY
+  else
+    cat "$file"
+  fi
+}
+
+send_request() {
+  local payload="$1"
+  local response_file
+  local status
+  local curl_exit
+
+  response_file="$(mktemp)"
+  trap 'rm -f "$response_file"' RETURN
+
+  echo "POST $WEBHOOK_URL"
+  echo
+
+  status="$(
+    curl --silent --show-error \
+      --connect-timeout 5 \
+      --max-time 30 \
+      --request POST "$WEBHOOK_URL" \
+      --header "Content-Type: application/json; charset=utf-8" \
+      --data "$payload" \
+      --output "$response_file" \
+      --write-out "%{http_code}"
+  )"
+  curl_exit=$?
+
+  if (( curl_exit != 0 )); then
+    echo "Webhook connection error (curl exit code: $curl_exit)." >&2
+    exit "$curl_exit"
+  fi
+
+  echo "HTTP $status"
+
+  if [[ -s "$response_file" ]]; then
+    pretty_print_json "$response_file"
+  else
+    echo "(empty response)"
+  fi
+
+  echo
+
+  if [[ "$status" != "$EXPECTED_STATUS" ]]; then
+    echo "Error: expected HTTP $EXPECTED_STATUS, received HTTP $status." >&2
+    exit 1
+  fi
+}
+
+PAYLOAD='{
+  "companyName": "",
+  "firstName": "Jan",
+  "lastName": "",
+  "nip": "1234567890",
+  "email": "niepoprawny-email",
+  "phone": "123"
+}'
+
+echo "Test: invalid data"
+send_request "$PAYLOAD"

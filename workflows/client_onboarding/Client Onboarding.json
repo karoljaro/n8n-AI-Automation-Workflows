@@ -1,0 +1,442 @@
+{
+  "name": "Client Onboarding",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "8ca8a4a1-1310-4d09-bf5d-c9719909a943",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        16,
+        112
+      ],
+      "id": "eb58350f-09d6-49da-aa99-da01a348a987",
+      "name": "Webhook",
+      "webhookId": "8ca8a4a1-1310-4d09-bf5d-c9719909a943"
+    },
+    {
+      "parameters": {
+        "jsCode": "const EMAIL_PATTERN = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nconst PHONE_PATTERN = /^\\+?[0-9]{9,15}$/;\n\nconst REQUIRED_FIELDS = [\n  'companyName',\n  'firstName',\n  'lastName',\n  'nip',\n  'email',\n  'phone',\n];\n\n/**\n * Removes spaces, hyphens, and parentheses from a phone number.\n */\nfunction normalizePhone(value) {\n  return String(value ?? '').replace(/[\\s()-]/g, '');\n}\n\n/**\n * Removes all non-digit characters from a NIP number.\n */\nfunction normalizeNip(value) {\n  return String(value ?? '').replace(/\\D/g, '');\n}\n\n/**\n * Validates the checksum of a Polish NIP number.\n */\nfunction isValidNip(nip) {\n  if (!/^\\d{10}$/.test(nip)) {\n    return false;\n  }\n\n  const weights = [6, 5, 7, 2, 3, 4, 5, 6, 7];\n\n  const checksum = weights.reduce(\n    (sum, weight, index) => sum + Number(nip[index]) * weight,\n    0,\n  );\n\n  const controlDigit = checksum % 11;\n\n  return controlDigit !== 10 && controlDigit === Number(nip[9]);\n}\n\n/**\n * Adds a validation error to a specific field.\n */\nfunction addError(errors, field, message) {\n  if (!errors[field]) {\n    errors[field] = [];\n  }\n\n  errors[field].push(message);\n}\n\n/**\n * Validates a single webhook request body.\n */\nfunction validateWebhookBody(input) {\n  const body =\n    input &&\n    typeof input === 'object' &&\n    input.body &&\n    typeof input.body === 'object' &&\n    !Array.isArray(input.body)\n      ? input.body\n      : {};\n\n  const data = {\n    companyName: String(body.companyName ?? '').trim(),\n    firstName: String(body.firstName ?? '').trim(),\n    lastName: String(body.lastName ?? '').trim(),\n    nip: normalizeNip(body.nip),\n    email: String(body.email ?? '').trim().toLowerCase(),\n    phone: normalizePhone(body.phone),\n  };\n\n  const errors = {};\n\n  // 1. Required fields\n  for (const field of REQUIRED_FIELDS) {\n    if (!data[field]) {\n      addError(errors, field, 'This field is required.');\n    }\n  }\n\n  // 2. Company name\n  if (data.companyName && data.companyName.length < 2) {\n    addError(\n      errors,\n      'companyName',\n      'The company name must contain at least 2 characters.',\n    );\n  }\n\n  if (data.companyName.length > 150) {\n    addError(\n      errors,\n      'companyName',\n      'The company name cannot exceed 150 characters.',\n    );\n  }\n\n  // 3. First name\n  if (data.firstName && data.firstName.length < 2) {\n    addError(\n      errors,\n      'firstName',\n      'The first name must contain at least 2 characters.',\n    );\n  }\n\n  if (data.firstName.length > 100) {\n    addError(\n      errors,\n      'firstName',\n      'The first name cannot exceed 100 characters.',\n    );\n  }\n\n  // 4. Last name\n  if (data.lastName && data.lastName.length < 2) {\n    addError(\n      errors,\n      'lastName',\n      'The last name must contain at least 2 characters.',\n    );\n  }\n\n  if (data.lastName.length > 100) {\n    addError(\n      errors,\n      'lastName',\n      'The last name cannot exceed 100 characters.',\n    );\n  }\n\n  // 5. NIP\n  if (data.nip) {\n    if (!/^\\d{10}$/.test(data.nip)) {\n      addError(\n        errors,\n        'nip',\n        'The NIP number must contain exactly 10 digits.',\n      );\n    } else if (!isValidNip(data.nip)) {\n      addError(\n        errors,\n        'nip',\n        'The NIP number has an invalid checksum.',\n      );\n    }\n  }\n\n  // 6. Email address\n  if (data.email && !EMAIL_PATTERN.test(data.email)) {\n    addError(\n      errors,\n      'email',\n      'Enter a valid email address.',\n    );\n  }\n\n  if (data.email.length > 254) {\n    addError(\n      errors,\n      'email',\n      'The email address cannot exceed 254 characters.',\n    );\n  }\n\n  // 7. Phone number\n  if (data.phone && !PHONE_PATTERN.test(data.phone)) {\n    addError(\n      errors,\n      'phone',\n      'The phone number must contain between 9 and 15 digits and may start with a + sign.',\n    );\n  }\n\n  return {\n    valid: Object.keys(errors).length === 0,\n    data,\n    errors,\n  };\n}\n\nreturn $input.all().map((item, index) => {\n  const input = item.json ?? {};\n  const validation = validateWebhookBody(input);\n\n  return {\n    json: {\n      success: validation.valid,\n      statusCode: validation.valid ? 200 : 422,\n      inputIndex: index,\n      data: validation.data,\n      errors: validation.errors,\n      meta: {\n        executionMode: input.executionMode ?? null,\n        webhookUrl: input.webhookUrl ?? null,\n      },\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        112
+      ],
+      "id": "430266ba-c353-43d7-9677-aaf2dde9202b",
+      "name": "Input validation"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  success: $json.success,\n  statusCode: $json.statusCode,\n  message: 'The provided input data is invalid.',\n  errors: $json.errors\n} }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        688,
+        208
+      ],
+      "id": "42a3d255-59c0-44ac-a7c6-a0ef057f818c",
+      "name": "Respond on validation failure"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "fileFolder",
+        "queryString": "={{ $json.data.nip }} - {{ $json.data.companyName }}",
+        "limit": 3,
+        "filter": {
+          "folderId": {
+            "__rl": true,
+            "value": "1JQ7_mq1OXXRy-Eq_pyxzFZpGhTRoDFHL",
+            "mode": "list",
+            "cachedResultName": "n8n - deweloperskie",
+            "cachedResultUrl": "https://drive.google.com/drive/folders/1JQ7_mq1OXXRy-Eq_pyxzFZpGhTRoDFHL"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        688,
+        16
+      ],
+      "id": "1b57c634-5c89-4071-8b5b-e3b61359dbf1",
+      "name": "Search folders",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "24badd5e-ec30-4df4-ac62-8238f91d71d2",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        464,
+        112
+      ],
+      "id": "53747b41-db6b-4180-bbf0-f99add520965",
+      "name": "Is valid"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c2800ac2-532c-43ff-9ade-56fecf94f905",
+              "leftValue": "={{ $('Search folders').first().json.isNotEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        912,
+        16
+      ],
+      "id": "44636f41-c889-46e0-bed2-dbdb240d2baa",
+      "name": "Folder exist"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "folder",
+        "name": "={{ $('Input validation').item.json.data.nip }} - {{ $('Input validation').item.json.data.companyName }}",
+        "driveId": {
+          "__rl": true,
+          "value": "0ALZJMSWL7rveUk9PVA",
+          "mode": "id"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "https://drive.google.com/drive/folders/1JQ7_mq1OXXRy-Eq_pyxzFZpGhTRoDFHL",
+          "mode": "url"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1136,
+        112
+      ],
+      "id": "376490ca-b134-49ce-a123-002414c756b5",
+      "name": "Create client folder",
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"statusCode\": 409,\n  \"error\": \"FOLDER_ALREADY_EXISTS\",\n  \"message\": \"A client folder named \\\"{{ $json.name }}\\\" already exists.\"\n}",
+        "options": {
+          "responseCode": 409
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1136,
+        -80
+      ],
+      "id": "d2a270ad-60aa-44ee-b522-eae7f4e5217f",
+      "name": "Client folder already exist"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "folder",
+        "operation": "share",
+        "folderNoRootId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "permissionsUi": {
+          "permissionsValues": {
+            "role": "reader",
+            "type": "anyone"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1584,
+        112
+      ],
+      "id": "02acc81a-2bca-447f-bc62-30a57ea3a726",
+      "name": "Share folder",
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "folder",
+        "name": "udostępnione",
+        "driveId": {
+          "__rl": true,
+          "value": "={{ $json.driveId }}",
+          "mode": "id"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1360,
+        112
+      ],
+      "id": "89ba39a6-0272-4ab7-b711-fefb494ef1c9",
+      "name": "Create share folder",
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "admin@example.com",
+        "toEmail": "={{ $('Input validation').item.json.data.email }}",
+        "subject": "Twój folder Google Drive jest gotowy",
+        "html": "=<!doctype html>\n<html lang=\"pl\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>Folder Google Drive</title>\n</head>\n\n<body style=\"margin:0; padding:0; background-color:#f4f6f8; font-family:Arial, Helvetica, sans-serif; color:#202124;\">\n  <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\" style=\"width:100%; background-color:#f4f6f8;\">\n    <tr>\n      <td align=\"center\" style=\"padding:32px 16px;\">\n        \n        <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\"\n          style=\"width:100%; max-width:620px; background-color:#ffffff; border:1px solid #e0e3e7; border-radius:12px;\">\n          \n          <tr>\n            <td style=\"padding:32px 32px 16px 32px;\">\n              <div style=\"font-size:13px; font-weight:bold; letter-spacing:0.6px; text-transform:uppercase; color:#5f6368;\">\n                Google Drive\n              </div>\n\n              <h1 style=\"margin:12px 0 0 0; font-size:26px; line-height:1.3; color:#202124;\">\n                Twój folder jest gotowy\n              </h1>\n            </td>\n          </tr>\n\n          <tr>\n            <td style=\"padding:0 32px;\">\n              <p style=\"margin:0 0 16px 0; font-size:16px; line-height:1.6; color:#3c4043;\">\n                Dzień dobry\n                {{ $('Webhook').first().json.body.firstName ? ' ' + $('Webhook').first().json.body.firstName : '' }},\n              </p>\n\n              <p style=\"margin:0 0 16px 0; font-size:16px; line-height:1.6; color:#3c4043;\">\n                przygotowaliśmy folder dla firmy\n                <strong>{{ $('Webhook').first().json.body.companyName }}</strong>.\n              </p>\n\n              <p style=\"margin:0 0 24px 0; font-size:16px; line-height:1.6; color:#3c4043;\">\n                Folder jest udostępniony w trybie tylko do odczytu. Możesz przeglądać znajdujące się w nim pliki, ale nie możesz ich edytować ani usuwać.\n              </p>\n            </td>\n          </tr>\n\n          <tr>\n            <td align=\"center\" style=\"padding:4px 32px 28px 32px;\">\n              <table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\">\n                <tr>\n                  <td align=\"center\" bgcolor=\"#1a73e8\" style=\"border-radius:8px;\">\n                    <a\n                      href=\"https://drive.google.com/drive/folders/{{ $('Create share folder').first().json.id }}\"\n                      target=\"_blank\"\n                      style=\"display:inline-block; padding:14px 24px; font-size:16px; font-weight:bold; line-height:1; color:#ffffff; text-decoration:none; border-radius:8px;\"\n                    >\n                      Otwórz folder\n                    </a>\n                  </td>\n                </tr>\n              </table>\n            </td>\n          </tr>\n\n          <tr>\n            <td style=\"padding:0 32px 24px 32px;\">\n              <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\"\n                style=\"width:100%; background-color:#f8f9fa; border-radius:8px;\">\n                <tr>\n                  <td style=\"padding:16px;\">\n                    <p style=\"margin:0 0 8px 0; font-size:13px; line-height:1.5; color:#5f6368;\">\n                      Jeżeli przycisk nie działa, skopiuj poniższy adres i wklej go do przeglądarki:\n                    </p>\n\n                    <p style=\"margin:0; font-size:13px; line-height:1.5; word-break:break-all;\">\n                      <a\n                        href=\"https://drive.google.com/drive/folders/{{ $('Create share folder').first().json.id }}\"\n                        style=\"color:#1a73e8; text-decoration:underline;\"\n                      >\n                        https://drive.google.com/drive/folders/{{ $('Create share folder').first().json.id }}\n                      </a>\n                    </p>\n                  </td>\n                </tr>\n              </table>\n            </td>\n          </tr>\n\n          <tr>\n            <td style=\"padding:20px 32px 32px 32px; border-top:1px solid #e8eaed;\">\n              <p style=\"margin:0; font-size:13px; line-height:1.6; color:#80868b;\">\n                Wiadomość została wygenerowana automatycznie. Prosimy na nią nie odpowiadać.\n              </p>\n            </td>\n          </tr>\n\n        </table>\n\n      </td>\n    </tr>\n  </table>\n</body>\n</html>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1808,
+        112
+      ],
+      "id": "74e25112-02fc-48c2-9a73-76407266740a",
+      "name": "Send an Email",
+      "webhookId": "08d566fb-00c2-4e69-8498-841f901bce71",
+      "notesInFlow": false,
+      "credentials": {
+        "smtp": {
+          "id": "YnN22zl9muZHMY18",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  success: true,\n  statusCode: 201,\n  message: \"The client folder was created successfully and the access link was sent by email.\",\n  data: {\n    clientFolderId: $('Create client folder').first().json.id,\n    clientFolderName: $('Create client folder').first().json.name,\n    sharedFolderId: $('Create share folder').first().json.id,\n    sharedFolderName: $('Create share folder').first().json.name,\n    recipientEmail: $('Send an Email').first().json.accepted?.[0] ?? null\n  }\n} }}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2032,
+        112
+      ],
+      "id": "ca48152f-7647-485c-9eac-740deda3a1f4",
+      "name": "Respond on success"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Input validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input validation": {
+      "main": [
+        [
+          {
+            "node": "Is valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search folders": {
+      "main": [
+        [
+          {
+            "node": "Folder exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is valid": {
+      "main": [
+        [
+          {
+            "node": "Search folders",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond on validation failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Folder exist": {
+      "main": [
+        [
+          {
+            "node": "Client folder already exist",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create client folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create client folder": {
+      "main": [
+        [
+          {
+            "node": "Create share folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create share folder": {
+      "main": [
+        [
+          {
+            "node": "Share folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Share folder": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email": {
+      "main": [
+        [
+          {
+            "node": "Respond on success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "dbce2ecf-05c9-4147-8843-aaa40266eb46",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "515c562cc95ce0be72c2644780effa63717402a73f20a15a16e0f26040a5f7a9"
+  },
+  "nodeGroups": [],
+  "id": "KUNnO6oarVyTrHQ6",
+  "tags": []
+}
