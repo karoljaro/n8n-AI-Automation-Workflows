@@ -1,0 +1,835 @@
+{
+  "name": "autolektor",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "AutoLektor — generowanie materiału",
+        "formDescription": "Dodaj linki do filmu MP4 oraz pliku tekstowego TXT zapisanych na Google Drive. Następnie wybierz wariant materiału, język i głos lektora. Po zakończeniu przetwarzania otrzymasz wiadomość email z linkiem do gotowego pliku.\n\nPlik tekstowy musi mieć rozszerzenie .txt i kodowanie UTF-8. Konto Google używane przez system musi mieć dostęp do obu plików.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Film — link z Google Drive",
+              "fieldName": "videoUrl",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Tekst TXT — link z Google Drive",
+              "fieldName": "textUrl",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Wariant",
+              "fieldType": "dropdown",
+              "fieldName": "variant",
+              "defaultValue": "full",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "full"
+                  },
+                  {
+                    "option": "voiceover"
+                  },
+                  {
+                    "option": "subtitles"
+                  },
+                  {
+                    "option": "dubbed"
+                  },
+                  {
+                    "option": "subtitled"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Język",
+              "fieldType": "dropdown",
+              "fieldName": "language",
+              "defaultValue": "pl",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "pl"
+                  },
+                  {
+                    "option": "en"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Adres e-mail odbiorcy",
+              "fieldType": "email",
+              "fieldName": "recipientEmail",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Głos",
+              "fieldType": "dropdown",
+              "fieldName": "voice",
+              "defaultValue": "pl-PL-ZofiaNeural",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "pl-PL-ZofiaNeural"
+                  },
+                  {
+                    "option": "pl-PL-MarekNeural"
+                  },
+                  {
+                    "option": "en-US-JennyNeural"
+                  },
+                  {
+                    "option": "en-US-GuyNeural"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {
+          "appendAttribution": false,
+          "respondWithOptions": {
+            "values": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        64,
+        -128
+      ],
+      "id": "4acd2793-42b8-43e5-9078-78ea856c925f",
+      "name": "AutoLektor Form Submission",
+      "webhookId": "73b8da55-9d73-43ea-902a-dfd30a50268a"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Expected form field names:\n *   videoUrl\n *   textUrl\n *   variant\n *   language\n *   voice\n *   recipientEmail\n */\n\nconst ALLOWED_VARIANTS = new Set([\n  'full',\n  'voiceover',\n  'subtitles',\n  'dubbed',\n  'subtitled',\n]);\n\nconst ALLOWED_LANGUAGES = new Set([\n  'pl',\n  'en',\n]);\n\nconst ALLOWED_VOICES = new Set([\n  'pl-PL-ZofiaNeural',\n  'pl-PL-MarekNeural',\n  'en-US-JennyNeural',\n  'en-US-GuyNeural',\n]);\n\nconst GOOGLE_FILE_ID_PATTERN = /^[A-Za-z0-9_-]{10,}$/;\nconst EMAIL_PATTERN = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/i;\nconst HTTPS_URL_PATTERN = /^https:\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/i;\n\nfunction addError(errors, field, code, message) {\n  errors.push({\n    field,\n    code,\n    message,\n  });\n}\n\nfunction getRequiredString(input, field, errors, options = {}) {\n  const label = options.label ?? field;\n  const maxLength = options.maxLength ?? 2048;\n  const value = input[field];\n\n  if (typeof value !== 'string') {\n    addError(\n      errors,\n      field,\n      'INVALID_TYPE',\n      `Pole \"${label}\" musi być tekstem.`,\n    );\n\n    return null;\n  }\n\n  const normalizedValue = value.trim();\n\n  if (normalizedValue.length === 0) {\n    addError(\n      errors,\n      field,\n      'REQUIRED',\n      `Pole \"${label}\" jest wymagane.`,\n    );\n\n    return null;\n  }\n\n  if (normalizedValue.length > maxLength) {\n    addError(\n      errors,\n      field,\n      'TOO_LONG',\n      `Pole \"${label}\" może mieć maksymalnie ${maxLength} znaków.`,\n    );\n\n    return null;\n  }\n\n  return normalizedValue;\n}\n\nfunction getQueryParameter(queryString, parameterName) {\n  if (!queryString) {\n    return null;\n  }\n\n  const pairs = queryString.split('&');\n\n  for (const pair of pairs) {\n    const separatorIndex = pair.indexOf('=');\n\n    const rawKey =\n      separatorIndex === -1\n        ? pair\n        : pair.slice(0, separatorIndex);\n\n    if (decodeURIComponent(rawKey.replace(/\\+/g, ' ')) !== parameterName) {\n      continue;\n    }\n\n    const rawValue =\n      separatorIndex === -1\n        ? ''\n        : pair.slice(separatorIndex + 1);\n\n    return decodeURIComponent(rawValue.replace(/\\+/g, ' '));\n  }\n\n  return null;\n}\n\nfunction parseHttpsUrl(value, field, errors) {\n  const match = value.match(HTTPS_URL_PATTERN);\n\n  if (!match) {\n    addError(\n      errors,\n      field,\n      'INVALID_URL',\n      'Podaj prawidłowy link HTTPS.',\n    );\n\n    return null;\n  }\n\n  const hostname = (match[1] ?? '')\n    .toLowerCase()\n    .replace(/^www\\./, '');\n\n  const pathname = match[2] || '/';\n  const queryString = match[3] || '';\n\n  return {\n    hostname,\n    pathname,\n    queryString,\n  };\n}\n\nfunction validateGoogleResourceUrl(\n  value,\n  field,\n  errors,\n  acceptedResourceTypes,\n) {\n  const parsedUrl = parseHttpsUrl(value, field, errors);\n\n  if (parsedUrl === null) {\n    return null;\n  }\n\n  const {\n    hostname,\n    pathname,\n    queryString,\n  } = parsedUrl;\n\n  let resourceId = null;\n  let resourceType = null;\n\n  if (hostname === 'drive.google.com') {\n    if (/\\/folders\\//i.test(pathname)) {\n      addError(\n        errors,\n        field,\n        'FOLDER_NOT_ALLOWED',\n        'Podaj link do pliku, a nie do folderu Google Drive.',\n      );\n\n      return null;\n    }\n\n    const filePathMatch = pathname.match(\n      /\\/file\\/d\\/([A-Za-z0-9_-]+)/i,\n    );\n\n    resourceId =\n      filePathMatch?.[1] ??\n      getQueryParameter(queryString, 'id');\n\n    resourceType = 'driveFile';\n  } else if (hostname === 'docs.google.com') {\n    const documentMatch = pathname.match(\n      /\\/document\\/d\\/([A-Za-z0-9_-]+)/i,\n    );\n\n    if (documentMatch?.[1]) {\n      resourceId = documentMatch[1];\n      resourceType = 'googleDocument';\n    }\n  } else {\n    addError(\n      errors,\n      field,\n      'INVALID_GOOGLE_DOMAIN',\n      'Dozwolone są wyłącznie linki z drive.google.com lub docs.google.com.',\n    );\n\n    return null;\n  }\n\n  if (\n    resourceId === null ||\n    !GOOGLE_FILE_ID_PATTERN.test(resourceId)\n  ) {\n    addError(\n      errors,\n      field,\n      'INVALID_GOOGLE_RESOURCE',\n      'Nie udało się odczytać prawidłowego identyfikatora pliku Google.',\n    );\n\n    return null;\n  }\n\n  if (\n    resourceType === null ||\n    !acceptedResourceTypes.includes(resourceType)\n  ) {\n    addError(\n      errors,\n      field,\n      'UNSUPPORTED_GOOGLE_RESOURCE',\n      'Ten typ zasobu Google nie jest obsługiwany w tym polu.',\n    );\n\n    return null;\n  }\n\n  const canonicalUrl =\n    resourceType === 'googleDocument'\n      ? `https://docs.google.com/document/d/${resourceId}/edit`\n      : `https://drive.google.com/file/d/${resourceId}/view`;\n\n  return {\n    id: resourceId,\n    type: resourceType,\n    url: canonicalUrl,\n  };\n}\n\nfunction validateEnum(\n  value,\n  field,\n  label,\n  errors,\n  allowedValues,\n) {\n  if (value === null) {\n    return null;\n  }\n\n  if (!allowedValues.has(value)) {\n    addError(\n      errors,\n      field,\n      'INVALID_VALUE',\n      `Pole \"${label}\" zawiera nieobsługiwaną wartość: \"${value}\".`,\n    );\n\n    return null;\n  }\n\n  return value;\n}\n\nfunction validateEmail(value, errors) {\n  if (value === null) {\n    return null;\n  }\n\n  const normalizedEmail = value.toLowerCase();\n\n  if (!EMAIL_PATTERN.test(normalizedEmail)) {\n    addError(\n      errors,\n      'recipientEmail',\n      'INVALID_EMAIL',\n      'Podaj prawidłowy adres email.',\n    );\n\n    return null;\n  }\n\n  return normalizedEmail;\n}\n\nconst items = $input.all();\n\nreturn items.map((item, index) => {\n  const input = item.json ?? {};\n  const errors = [];\n\n  const videoUrlValue = getRequiredString(\n    input,\n    'videoUrl',\n    errors,\n    {\n      label: 'Video URL',\n      maxLength: 2048,\n    },\n  );\n\n  const textUrlValue = getRequiredString(\n    input,\n    'textUrl',\n    errors,\n    {\n      label: 'Text URL',\n      maxLength: 2048,\n    },\n  );\n\n  const variantValue = getRequiredString(\n    input,\n    'variant',\n    errors,\n    {\n      label: 'Variant',\n      maxLength: 50,\n    },\n  );\n\n  const languageValue = getRequiredString(\n    input,\n    'language',\n    errors,\n    {\n      label: 'Language',\n      maxLength: 10,\n    },\n  );\n\n  const voiceValue = getRequiredString(\n    input,\n    'voice',\n    errors,\n    {\n      label: 'Voice',\n      maxLength: 100,\n    },\n  );\n\n  const recipientEmailValue = getRequiredString(\n    input,\n    'recipientEmail',\n    errors,\n    {\n      label: 'Recipient Email',\n      maxLength: 254,\n    },\n  );\n\n  const variant = validateEnum(\n    variantValue?.toLowerCase() ?? null,\n    'variant',\n    'Variant',\n    errors,\n    ALLOWED_VARIANTS,\n  );\n\n  const language = validateEnum(\n    languageValue?.toLowerCase() ?? null,\n    'language',\n    'Language',\n    errors,\n    ALLOWED_LANGUAGES,\n  );\n\n  const voice = validateEnum(\n    voiceValue,\n    'voice',\n    'Voice',\n    errors,\n    ALLOWED_VOICES,\n  );\n\n  const recipientEmail = validateEmail(\n    recipientEmailValue,\n    errors,\n  );\n\n  let videoResource = null;\n  let textResource = null;\n\n  if (videoUrlValue !== null) {\n    videoResource = validateGoogleResourceUrl(\n      videoUrlValue,\n      'videoUrl',\n      errors,\n      ['driveFile'],\n    );\n  }\n\n  if (textUrlValue !== null) {\n    textResource = validateGoogleResourceUrl(\n      textUrlValue,\n      'textUrl',\n      errors,\n      [\n        'driveFile',\n        'googleDocument',\n      ],\n    );\n  }\n\n  if (\n    language !== null &&\n    voice !== null &&\n    !voice.toLowerCase().startsWith(`${language}-`)\n  ) {\n    addError(\n      errors,\n      'voice',\n      'VOICE_LANGUAGE_MISMATCH',\n      `Wybrany głos \"${voice}\" nie pasuje do języka \"${language}\".`,\n    );\n  }\n\n  let data = null;\n\n  if (\n    errors.length === 0 &&\n    videoResource !== null &&\n    textResource !== null &&\n    variant !== null &&\n    language !== null &&\n    voice !== null &&\n    recipientEmail !== null\n  ) {\n    data = {\n      videoUrl: videoResource.url,\n      videoFileId: videoResource.id,\n\n      textUrl: textResource.url,\n      textFileId: textResource.id,\n      textSourceType: textResource.type,\n\n      variant,\n      language,\n      voice,\n      recipientEmail,\n    };\n  }\n\n  const valid = data !== null;\n\n  return {\n    json: {\n      valid,\n      statusCode: valid ? 200 : 400,\n      message: valid\n        ? 'Dane formularza są prawidłowe.'\n        : 'Walidacja formularza nie powiodła się.',\n      errors,\n      data,\n    },\n    pairedItem: {\n      item: index,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        -128
+      ],
+      "id": "3bef1ca9-2470-48cb-b138-44cadf866686",
+      "name": "Validate Form Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5b719972-04af-403e-9561-35b255606d71",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        512,
+        -128
+      ],
+      "id": "cef1fdc6-752b-4672-a893-0a31941f3ab2",
+      "name": "Is Input Valid?"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "={{\n  (() => {\n    const escapeHtml = (value) =>\n      String(value ?? '')\n        .replaceAll('&', '&amp;')\n        .replaceAll('<', '&lt;')\n        .replaceAll('>', '&gt;')\n        .replaceAll('\"', '&quot;')\n        .replaceAll(\"'\", '&#039;');\n\n    const fieldLabels = {\n      videoUrl: 'Video URL',\n      textUrl: 'Text URL',\n      variant: 'Variant',\n      language: 'Language',\n      voice: 'Voice',\n      recipientEmail: 'Recipient Email',\n    };\n\n    const errors = Array.isArray($json.errors) ? $json.errors : [];\n\n    const errorItems = errors\n      .map((error) => {\n        const field = fieldLabels[error.field] ?? error.field ?? 'Pole';\n        const message = error.message ?? 'Nieprawidłowa wartość.';\n\n        return `\n          <li style=\"\n            display: flex;\n            gap: 12px;\n            padding: 14px 16px;\n            margin: 0 0 10px;\n            background: #fff5f5;\n            border: 1px solid #f3c2c2;\n            border-radius: 8px;\n            list-style: none;\n          \">\n            <span style=\"\n              flex: 0 0 auto;\n              width: 22px;\n              height: 22px;\n              display: inline-flex;\n              align-items: center;\n              justify-content: center;\n              margin-top: 1px;\n              border-radius: 50%;\n              background: #e5484d;\n              color: #ffffff;\n              font-size: 14px;\n              font-weight: 700;\n              line-height: 1;\n            \">!</span>\n\n            <div style=\"min-width: 0;\">\n              <div style=\"\n                margin-bottom: 3px;\n                color: #332d2d;\n                font-size: 14px;\n                font-weight: 600;\n              \">\n                ${escapeHtml(field)}\n              </div>\n\n              <div style=\"\n                color: #6f5b5b;\n                font-size: 14px;\n                line-height: 1.5;\n              \">\n                ${escapeHtml(message)}\n              </div>\n            </div>\n          </li>\n        `;\n      })\n      .join('');\n\n    return `\n      <div style=\"\n        width: 100%;\n        max-width: 640px;\n        margin: 0 auto;\n        padding: 8px 0;\n        color: #332d2d;\n        font-family: Inter, Arial, sans-serif;\n      \">\n        <div style=\"\n          padding: 28px;\n          background: #ffffff;\n          border: 1px solid #dedede;\n          border-radius: 10px;\n          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);\n        \">\n          <div style=\"\n            display: flex;\n            align-items: center;\n            gap: 14px;\n            margin-bottom: 14px;\n          \">\n            <div style=\"\n              width: 42px;\n              height: 42px;\n              display: flex;\n              align-items: center;\n              justify-content: center;\n              flex: 0 0 auto;\n              border-radius: 50%;\n              background: #fff0ed;\n              color: #ff6d5a;\n              font-size: 22px;\n              font-weight: 700;\n            \">!</div>\n\n            <h1 style=\"\n              margin: 0;\n              color: #332d2d;\n              font-size: 22px;\n              font-weight: 600;\n              line-height: 1.3;\n            \">\n              Walidacja danych nie powiodła się\n            </h1>\n          </div>\n\n          <p style=\"\n            margin: 0 0 22px;\n            color: #6b6666;\n            font-size: 15px;\n            line-height: 1.6;\n          \">\n            Sprawdź poniższe pola, popraw dane i wyślij formularz ponownie.\n          </p>\n\n          <ul style=\"\n            margin: 0;\n            padding: 0;\n          \">\n            ${\n              errorItems ||\n              `\n                <li style=\"\n                  padding: 14px 16px;\n                  background: #fff5f5;\n                  border: 1px solid #f3c2c2;\n                  border-radius: 8px;\n                  color: #6f5b5b;\n                  list-style: none;\n                \">\n                  Formularz zawiera nieprawidłowe dane.\n                </li>\n              `\n            }\n          </ul>\n\n          <div style=\"\n            margin-top: 24px;\n            padding-top: 20px;\n            border-top: 1px solid #eeeeee;\n          \">\n            <a\n              href=\"http://localhost:5678/form/73b8da55-9d73-43ea-902a-dfd30a50268a\"\n              style=\"\n                display: inline-flex;\n                align-items: center;\n                justify-content: center;\n                min-height: 42px;\n                padding: 0 18px;\n                background: #ff6d5a;\n                border: 1px solid #ff6d5a;\n                border-radius: 6px;\n                color: #ffffff;\n                font-size: 14px;\n                font-weight: 600;\n                text-decoration: none;\n                box-sizing: border-box;\n              \"\n            >\n              Wróć do formularza\n            </a>\n          </div>\n        </div>\n      </div>\n    `;\n  })()\n}}"
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        736,
+        -32
+      ],
+      "id": "be293b71-888c-46c2-9fe8-2a7e5cadd763",
+      "name": "Show Input Validation Errors",
+      "webhookId": "8ee465c8-f582-4965-8daf-53d48b1c598b"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/drive/v3/files/{{$json.data.videoFileId}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "id,name,mimeType,trashed,size,webViewLink"
+            },
+            {
+              "name": "supportsAllDrives",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        736,
+        -416
+      ],
+      "id": "1665994d-d1d0-4780-95af-b811a35ff000",
+      "name": "Get Video MIME Type",
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"video\": {{ $json }}\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        960,
+        -416
+      ],
+      "id": "9b68fbfa-8f92-4d53-9f08-35f46d1bbd02",
+      "name": "Namespace Video Metadata"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"text\": {{ $json }}\n}\n\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        960,
+        -224
+      ],
+      "id": "f60cc58b-b304-43ed-9e74-fa49ffafd7cb",
+      "name": "Namespace Text Metadata"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/drive/v3/files/{{$json.data.textFileId}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "id,name,mimeType,trashed,size,webViewLink"
+            },
+            {
+              "name": "supportsAllDrives",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        736,
+        -224
+      ],
+      "id": "eab95d80-86fd-4954-961f-c52ae1378c17",
+      "name": "Get Text MIME Type",
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1184,
+        -224
+      ],
+      "id": "5422513c-de27-4b28-bbeb-ac152e54845f",
+      "name": "Append MIME Type Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map((item) => item.json);\n\nconst video = items.find((item) => item.video)?.video ?? null;\nconst text = items.find((item) => item.text)?.text ?? null;\n\nconst errors = [];\n\nfunction addError(field, code, message) {\n  errors.push({\n    field,\n    code,\n    message,\n  });\n}\n\n// Walidacja filmu\nif (!video) {\n  addError(\n    'videoUrl',\n    'VIDEO_METADATA_MISSING',\n    'Nie udało się pobrać informacji o pliku wideo.',\n  );\n} else {\n  if (video.trashed !== false) {\n    addError(\n      'videoUrl',\n      'FILE_IN_TRASH',\n      'Wybrany plik wideo znajduje się w koszu.',\n    );\n  }\n\n  if (\n    typeof video.mimeType !== 'string' ||\n    !video.mimeType.startsWith('video/')\n  ) {\n    addError(\n      'videoUrl',\n      'INVALID_VIDEO_MIME_TYPE',\n      `Wybrany plik nie jest plikiem wideo. Wykryty typ: ${\n        video.mimeType ?? 'nieznany'\n      }.`,\n    );\n  }\n}\n\n// Dozwolone typy pliku tekstowego\nconst allowedTextMimeTypes = new Set([\n  'text/plain',\n]);\n\n// Walidacja tekstu\nif (!text) {\n  addError(\n    'textUrl',\n    'TEXT_METADATA_MISSING',\n    'Nie udało się pobrać informacji o pliku tekstowym.',\n  );\n} else {\n  if (text.trashed !== false) {\n    addError(\n      'textUrl',\n      'FILE_IN_TRASH',\n      'Wybrany plik tekstowy znajduje się w koszu.',\n    );\n  }\n\n  if (!allowedTextMimeTypes.has(text.mimeType)) {\n    addError(\n      'textUrl',\n      'INVALID_TEXT_MIME_TYPE',\n      `Wybrany plik nie jest obsługiwanym plikiem tekstowym. Wykryty typ: ${\n        text.mimeType ?? 'nieznany'\n      }.`,\n    );\n  }\n}\n\nconst valid = errors.length === 0;\n\n// Dane z wcześniejszej walidacji formularza\nconst formData = $('Is Input Valid?').first().json.data ?? null;\n\nreturn [\n  {\n    json: {\n      valid,\n      statusCode: valid ? 200 : 400,\n      message: valid\n        ? 'Pliki Google Drive są prawidłowe.'\n        : 'Walidacja plików Google Drive nie powiodła się.',\n      errors,\n      data: valid\n        ? {\n            ...formData,\n            video,\n            text,\n          }\n        : null,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1408,
+        -224
+      ],
+      "id": "43b93180-2cc1-49b9-b768-65247c9b1372",
+      "name": "Validate MIME Types"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f49c353f-3207-47f7-a927-e20f8be2af89",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1632,
+        -224
+      ],
+      "id": "ac0e167e-4fb7-4bc3-bf9e-2ccbe5cccb34",
+      "name": "Are MIME Types Valid?"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "={{\n  (() => {\n    const escapeHtml = (value) =>\n      String(value ?? '')\n        .replaceAll('&', '&amp;')\n        .replaceAll('<', '&lt;')\n        .replaceAll('>', '&gt;')\n        .replaceAll('\"', '&quot;')\n        .replaceAll(\"'\", '&#039;');\n\n    const fieldLabels = {\n      videoUrl: 'Video URL',\n      textUrl: 'Text URL',\n      variant: 'Variant',\n      language: 'Language',\n      voice: 'Voice',\n      recipientEmail: 'Recipient Email',\n    };\n\n    const errors = Array.isArray($json.errors) ? $json.errors : [];\n\n    const errorItems = errors\n      .map((error) => {\n        const field = fieldLabels[error.field] ?? error.field ?? 'Pole';\n        const message = error.message ?? 'Nieprawidłowa wartość.';\n\n        return `\n          <li style=\"\n            display: flex;\n            gap: 12px;\n            padding: 14px 16px;\n            margin: 0 0 10px;\n            background: #fff5f5;\n            border: 1px solid #f3c2c2;\n            border-radius: 8px;\n            list-style: none;\n          \">\n            <span style=\"\n              flex: 0 0 auto;\n              width: 22px;\n              height: 22px;\n              display: inline-flex;\n              align-items: center;\n              justify-content: center;\n              margin-top: 1px;\n              border-radius: 50%;\n              background: #e5484d;\n              color: #ffffff;\n              font-size: 14px;\n              font-weight: 700;\n              line-height: 1;\n            \">!</span>\n\n            <div style=\"min-width: 0;\">\n              <div style=\"\n                margin-bottom: 3px;\n                color: #332d2d;\n                font-size: 14px;\n                font-weight: 600;\n              \">\n                ${escapeHtml(field)}\n              </div>\n\n              <div style=\"\n                color: #6f5b5b;\n                font-size: 14px;\n                line-height: 1.5;\n              \">\n                ${escapeHtml(message)}\n              </div>\n            </div>\n          </li>\n        `;\n      })\n      .join('');\n\n    return `\n      <div style=\"\n        width: 100%;\n        max-width: 640px;\n        margin: 0 auto;\n        padding: 8px 0;\n        color: #332d2d;\n        font-family: Inter, Arial, sans-serif;\n      \">\n        <div style=\"\n          padding: 28px;\n          background: #ffffff;\n          border: 1px solid #dedede;\n          border-radius: 10px;\n          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);\n        \">\n          <div style=\"\n            display: flex;\n            align-items: center;\n            gap: 14px;\n            margin-bottom: 14px;\n          \">\n            <div style=\"\n              width: 42px;\n              height: 42px;\n              display: flex;\n              align-items: center;\n              justify-content: center;\n              flex: 0 0 auto;\n              border-radius: 50%;\n              background: #fff0ed;\n              color: #ff6d5a;\n              font-size: 22px;\n              font-weight: 700;\n            \">!</div>\n\n            <h1 style=\"\n              margin: 0;\n              color: #332d2d;\n              font-size: 22px;\n              font-weight: 600;\n              line-height: 1.3;\n            \">\n              Walidacja danych nie powiodła się\n            </h1>\n          </div>\n\n          <p style=\"\n            margin: 0 0 22px;\n            color: #6b6666;\n            font-size: 15px;\n            line-height: 1.6;\n          \">\n            Sprawdź poniższe pola, popraw dane i wyślij formularz ponownie.\n          </p>\n\n          <ul style=\"\n            margin: 0;\n            padding: 0;\n          \">\n            ${\n              errorItems ||\n              `\n                <li style=\"\n                  padding: 14px 16px;\n                  background: #fff5f5;\n                  border: 1px solid #f3c2c2;\n                  border-radius: 8px;\n                  color: #6f5b5b;\n                  list-style: none;\n                \">\n                  Formularz zawiera nieprawidłowe dane.\n                </li>\n              `\n            }\n          </ul>\n\n          <div style=\"\n            margin-top: 24px;\n            padding-top: 20px;\n            border-top: 1px solid #eeeeee;\n          \">\n            <a\n              href=\"http://localhost:5678/form/73b8da55-9d73-43ea-902a-dfd30a50268a\"\n              style=\"\n                display: inline-flex;\n                align-items: center;\n                justify-content: center;\n                min-height: 42px;\n                padding: 0 18px;\n                background: #ff6d5a;\n                border: 1px solid #ff6d5a;\n                border-radius: 6px;\n                color: #ffffff;\n                font-size: 14px;\n                font-weight: 600;\n                text-decoration: none;\n                box-sizing: border-box;\n              \"\n            >\n              Wróć do formularza\n            </a>\n          </div>\n        </div>\n      </div>\n    `;\n  })()\n}}"
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1856,
+        -32
+      ],
+      "id": "9d4f2144-96b7-45fa-861d-3ab94845fa28",
+      "name": "Show MIME Validation Errors",
+      "webhookId": "8ee465c8-f582-4965-8daf-53d48b1c598b"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "={{ $json.data.videoUrl }}",
+          "__regex": "https:\\/\\/(?:drive|docs)\\.google\\.com(?:\\/.*|)\\/d\\/([0-9a-zA-Z\\-_]+)(?:\\/.*|)"
+        },
+        "options": {
+          "binaryPropertyName": "video"
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1856,
+        -416
+      ],
+      "id": "2729f534-f51d-4586-8d56-a7b195fd69c3",
+      "name": "Download Video File",
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.data.textUrl }}",
+          "mode": "url"
+        },
+        "options": {
+          "binaryPropertyName": "textFile"
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1856,
+        -224
+      ],
+      "id": "ee7fa51a-2585-4915-8b1f-b1ee69e47f13",
+      "name": "Download Text File",
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2080,
+        -416
+      ],
+      "id": "3e7f982a-901b-470a-88ad-61451ccb5978",
+      "name": "Combine Input Files"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://autolektor-api:8000/render",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "video",
+              "inputDataFieldName": "video"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "text_file",
+              "inputDataFieldName": "textFile"
+            },
+            {
+              "name": "variant",
+              "value": "={{ $json.data.variant }}"
+            },
+            {
+              "name": "voice",
+              "value": "={{ $json.data.voice }}"
+            },
+            {
+              "name": "language",
+              "value": "={{ $json.data.language }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "result"
+            }
+          },
+          "timeout": 900000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2304,
+        -416
+      ],
+      "id": "1a901b52-da10-4449-a048-eb1536e54c4b",
+      "name": "Render with AutoLektor API"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "folder",
+        "name": "={{ $now.format('dd.MM.yyyy HH:mm') }} - {{ $json.data.video.name }} - {{ $json.data.variant }}",
+        "driveId": {
+          "__rl": true,
+          "value": "0ALZJMSWL7rveUk9PVA",
+          "mode": "id"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1JQ7_mq1OXXRy-Eq_pyxzFZpGhTRoDFHL",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2528,
+        -272
+      ],
+      "id": "d0d716f0-1629-4852-8534-8fafbd8cf867",
+      "name": "Create Output Folder",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2752,
+        -416
+      ],
+      "id": "55315c5d-b748-4fae-84c8-547a201a508c",
+      "name": "Combine Result and Folder"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "inputDataFieldName": "result",
+        "driveId": {
+          "__rl": true,
+          "value": "={{ $json.driveId }}",
+          "mode": "id"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2976,
+        -416
+      ],
+      "id": "5d9feb53-d600-4564-8b1c-dd16a54bb06e",
+      "name": "Upload Rendered File",
+      "credentials": {
+        "googleApi": {
+          "id": "xjZ5qdv0LO49veDI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "admin@example.com",
+        "toEmail": "={{ $('Combine Result and Folder').item.json.data.recipientEmail }}",
+        "subject": "AutoLektor — Twój materiał jest gotowy",
+        "html": "=<!doctype html>\n<html lang=\"pl\">\n  <head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>AutoLektor — materiał jest gotowy</title>\n  </head>\n\n  <body\n    style=\"\n      margin: 0;\n      padding: 0;\n      background-color: #f4f4f5;\n      font-family: Arial, Helvetica, sans-serif;\n      color: #27272a;\n    \"\n  >\n    <table\n      role=\"presentation\"\n      width=\"100%\"\n      cellspacing=\"0\"\n      cellpadding=\"0\"\n      border=\"0\"\n      style=\"background-color: #f4f4f5;\"\n    >\n      <tr>\n        <td align=\"center\" style=\"padding: 32px 16px;\">\n          <table\n            role=\"presentation\"\n            width=\"100%\"\n            cellspacing=\"0\"\n            cellpadding=\"0\"\n            border=\"0\"\n            style=\"\n              max-width: 600px;\n              background-color: #ffffff;\n              border: 1px solid #e4e4e7;\n              border-radius: 12px;\n            \"\n          >\n            <tr>\n              <td style=\"padding: 32px;\">\n                <div\n                  style=\"\n                    margin-bottom: 24px;\n                    font-size: 22px;\n                    font-weight: 700;\n                    color: #18181b;\n                  \"\n                >\n                  AutoLektor\n                </div>\n\n                <h1\n                  style=\"\n                    margin: 0 0 16px;\n                    font-size: 24px;\n                    line-height: 1.3;\n                    color: #18181b;\n                  \"\n                >\n                  Twój materiał jest gotowy\n                </h1>\n\n                <p\n                  style=\"\n                    margin: 0 0 24px;\n                    font-size: 16px;\n                    line-height: 1.6;\n                    color: #52525b;\n                  \"\n                >\n                  AutoLektor zakończył przetwarzanie przesłanego materiału.\n                  Gotowy plik został zapisany na Google Drive.\n                </p>\n\n                <table\n                  role=\"presentation\"\n                  width=\"100%\"\n                  cellspacing=\"0\"\n                  cellpadding=\"0\"\n                  border=\"0\"\n                  style=\"\n                    margin-bottom: 24px;\n                    background-color: #fafafa;\n                    border: 1px solid #e4e4e7;\n                    border-radius: 8px;\n                  \"\n                >\n                  <tr>\n                    <td\n                      style=\"\n                        padding: 16px;\n                        font-size: 14px;\n                        line-height: 1.7;\n                        color: #52525b;\n                      \"\n                    >\n                      <strong style=\"color: #27272a;\">Plik:</strong>\n                      {{ $('Upload Rendered File').first().json.name }}\n                      <br>\n\n                      <strong style=\"color: #27272a;\">Wariant:</strong>\n                      {{ $('Combine Input Files').first().json.data.variant }}\n                      <br>\n\n                      <strong style=\"color: #27272a;\">Język:</strong>\n                      {{ $('Combine Input Files').first().json.data.language }}\n                      <br>\n\n                      <strong style=\"color: #27272a;\">Głos:</strong>\n                      {{ $('Combine Input Files').first().json.data.voice }}\n                    </td>\n                  </tr>\n                </table>\n\n                <table\n                  role=\"presentation\"\n                  cellspacing=\"0\"\n                  cellpadding=\"0\"\n                  border=\"0\"\n                >\n                  <tr>\n                    <td\n                      align=\"center\"\n                      style=\"\n                        background-color: #ff6658;\n                        border-radius: 8px;\n                      \"\n                    >\n                      <a\n                        href=\"{{ 'https://drive.google.com/drive/folders/' + $('Create Output Folder').first().json.id }}\"\n                        target=\"_blank\"\n                        style=\"\n                          display: inline-block;\n                          padding: 13px 22px;\n                          font-size: 16px;\n                          font-weight: 700;\n                          color: #ffffff;\n                          text-decoration: none;\n                        \"\n                      >\n                        Otwórz folder z wynikiem\n                      </a>\n                    </td>\n                  </tr>\n                </table>\n\n                <p\n                  style=\"\n                    margin: 24px 0 0;\n                    font-size: 13px;\n                    line-height: 1.6;\n                    color: #71717a;\n                  \"\n                >\n                  Dostęp do materiału został nadany dla adresu, na który\n                  wysłano tę wiadomość.\n                </p>\n              </td>\n            </tr>\n\n            <tr>\n              <td\n                style=\"\n                  padding: 20px 32px;\n                  border-top: 1px solid #e4e4e7;\n                  font-size: 12px;\n                  line-height: 1.5;\n                  color: #a1a1aa;\n                \"\n              >\n                Wiadomość została wygenerowana automatycznie przez workflow\n                AutoLektor.\n              </td>\n            </tr>\n          </table>\n        </td>\n      </tr>\n    </table>\n  </body>\n</html>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        3200,
+        -416
+      ],
+      "id": "de40cb2c-bd77-4048-b2bb-3cc73841d448",
+      "name": "Send Result Email",
+      "webhookId": "41954f28-ef7d-4308-85d8-f61adfd88bf5",
+      "credentials": {
+        "smtp": {
+          "id": "YnN22zl9muZHMY18",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "={{\n  (() => {\n    const escapeHtml = (value) =>\n      String(value ?? '')\n        .replaceAll('&', '&amp;')\n        .replaceAll('<', '&lt;')\n        .replaceAll('>', '&gt;')\n        .replaceAll('\"', '&quot;')\n        .replaceAll(\"'\", '&#039;');\n\n    const formData =\n      $('Validate Form Input').first().json.data ?? {};\n\n    const uploadedFile =\n      $('Upload Rendered File').first().json ?? {};\n\n    const outputFolder =\n      $('Create Output Folder').first().json ?? {};\n\n    const recipientEmail =\n      formData.recipientEmail ?? 'podany adres email';\n\n    const fileName =\n      uploadedFile.name ??\n      uploadedFile.fileName ??\n      'Gotowy materiał';\n\n    const variantLabels = {\n      full: 'Film z lektorem i napisami',\n      voiceover: 'Ścieżka lektorska',\n      subtitles: 'Napisy',\n      dubbed: 'Film z lektorem',\n      subtitled: 'Film z napisami',\n    };\n\n    const languageLabels = {\n      pl: 'Polski',\n      en: 'Angielski',\n    };\n\n    const variant =\n      variantLabels[formData.variant] ??\n      formData.variant ??\n      '—';\n\n    const language =\n      languageLabels[formData.language] ??\n      formData.language ??\n      '—';\n\n    const voice =\n      formData.voice ?? '—';\n\n    const folderId =\n      outputFolder.id ?? '';\n\n    const folderUrl = folderId\n      ? `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`\n      : '';\n\n    return `\n      <div style=\"\n        width: 100%;\n        max-width: 640px;\n        margin: 0 auto;\n        padding: 8px 0;\n        color: #332d2d;\n        font-family: Inter, Arial, sans-serif;\n      \">\n        <div style=\"\n          padding: 28px;\n          background: #ffffff;\n          border: 1px solid #dedede;\n          border-radius: 10px;\n          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);\n        \">\n          <div style=\"\n            display: flex;\n            align-items: center;\n            gap: 14px;\n            margin-bottom: 14px;\n          \">\n            <div style=\"\n              width: 42px;\n              height: 42px;\n              display: flex;\n              align-items: center;\n              justify-content: center;\n              flex: 0 0 auto;\n              border-radius: 50%;\n              background: #eaf8ef;\n              color: #2f8f55;\n              font-size: 22px;\n              font-weight: 700;\n              line-height: 1;\n            \">\n              ✓\n            </div>\n\n            <h1 style=\"\n              margin: 0;\n              color: #332d2d;\n              font-size: 22px;\n              font-weight: 600;\n              line-height: 1.3;\n            \">\n              Twój materiał jest gotowy\n            </h1>\n          </div>\n\n          <p style=\"\n            margin: 0 0 22px;\n            color: #6b6666;\n            font-size: 15px;\n            line-height: 1.6;\n          \">\n            AutoLektor zakończył przetwarzanie materiału.\n            Gotowy plik został zapisany na Google Drive.\n          </p>\n\n          <div style=\"\n            padding: 16px;\n            margin-bottom: 18px;\n            background: #f7fbf8;\n            border: 1px solid #cfe8d7;\n            border-radius: 8px;\n          \">\n            <div style=\"\n              display: flex;\n              gap: 12px;\n              align-items: flex-start;\n            \">\n              <span style=\"\n                flex: 0 0 auto;\n                width: 22px;\n                height: 22px;\n                display: inline-flex;\n                align-items: center;\n                justify-content: center;\n                margin-top: 1px;\n                border-radius: 50%;\n                background: #36a269;\n                color: #ffffff;\n                font-size: 13px;\n                font-weight: 700;\n                line-height: 1;\n              \">\n                ✓\n              </span>\n\n              <div style=\"min-width: 0;\">\n                <div style=\"\n                  margin-bottom: 3px;\n                  color: #294c37;\n                  font-size: 14px;\n                  font-weight: 600;\n                \">\n                  Wiadomość została wysłana\n                </div>\n\n                <div style=\"\n                  color: #557160;\n                  font-size: 14px;\n                  line-height: 1.5;\n                  overflow-wrap: anywhere;\n                \">\n                  Link do gotowego materiału wysłaliśmy na adres\n                  <strong>${escapeHtml(recipientEmail)}</strong>.\n                </div>\n              </div>\n            </div>\n          </div>\n\n          <div style=\"\n            padding: 16px;\n            background: #fafafa;\n            border: 1px solid #e4e4e4;\n            border-radius: 8px;\n          \">\n            <div style=\"\n              margin-bottom: 12px;\n              color: #332d2d;\n              font-size: 14px;\n              font-weight: 600;\n            \">\n              Szczegóły materiału\n            </div>\n\n            <table\n              role=\"presentation\"\n              style=\"\n                width: 100%;\n                border-collapse: collapse;\n                color: #6b6666;\n                font-size: 14px;\n                line-height: 1.5;\n              \"\n            >\n              <tr>\n                <td style=\"\n                  width: 100px;\n                  padding: 5px 12px 5px 0;\n                  vertical-align: top;\n                  color: #807a7a;\n                \">\n                  Plik\n                </td>\n\n                <td style=\"\n                  padding: 5px 0;\n                  color: #332d2d;\n                  font-weight: 500;\n                  overflow-wrap: anywhere;\n                \">\n                  ${escapeHtml(fileName)}\n                </td>\n              </tr>\n\n              <tr>\n                <td style=\"\n                  padding: 5px 12px 5px 0;\n                  vertical-align: top;\n                  color: #807a7a;\n                \">\n                  Wariant\n                </td>\n\n                <td style=\"\n                  padding: 5px 0;\n                  color: #332d2d;\n                \">\n                  ${escapeHtml(variant)}\n                </td>\n              </tr>\n\n              <tr>\n                <td style=\"\n                  padding: 5px 12px 5px 0;\n                  vertical-align: top;\n                  color: #807a7a;\n                \">\n                  Język\n                </td>\n\n                <td style=\"\n                  padding: 5px 0;\n                  color: #332d2d;\n                \">\n                  ${escapeHtml(language)}\n                </td>\n              </tr>\n\n              <tr>\n                <td style=\"\n                  padding: 5px 12px 5px 0;\n                  vertical-align: top;\n                  color: #807a7a;\n                \">\n                  Głos\n                </td>\n\n                <td style=\"\n                  padding: 5px 0;\n                  color: #332d2d;\n                  overflow-wrap: anywhere;\n                \">\n                  ${escapeHtml(voice)}\n                </td>\n              </tr>\n            </table>\n          </div>\n\n          ${\n            folderUrl\n              ? `\n                <div style=\"\n                  margin-top: 24px;\n                  padding-top: 20px;\n                  border-top: 1px solid #eeeeee;\n                \">\n                  <a\n                    href=\"${escapeHtml(folderUrl)}\"\n                    target=\"_blank\"\n                    rel=\"noopener noreferrer\"\n                    style=\"\n                      display: inline-flex;\n                      align-items: center;\n                      justify-content: center;\n                      min-height: 42px;\n                      padding: 0 18px;\n                      background: #ff6d5a;\n                      border: 1px solid #ff6d5a;\n                      border-radius: 6px;\n                      color: #ffffff;\n                      font-size: 14px;\n                      font-weight: 600;\n                      text-decoration: none;\n                      box-sizing: border-box;\n                    \"\n                  >\n                    Otwórz folder z wynikiem\n                  </a>\n                </div>\n              `\n              : ''\n          }\n\n          <p style=\"\n            margin: 20px 0 0;\n            color: #8b8585;\n            font-size: 13px;\n            line-height: 1.5;\n          \">\n            Możesz teraz bezpiecznie zamknąć tę kartę.\n          </p>\n        </div>\n      </div>\n    `;\n  })()\n}}\n"
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        3424,
+        -416
+      ],
+      "id": "c1fe2a33-25d8-4b7d-ab8a-f6724903b7eb",
+      "name": "Show Success Page",
+      "webhookId": "a41b8d6c-53ca-4613-a717-e52706aa9e9d"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "AutoLektor Form Submission": {
+      "main": [
+        [
+          {
+            "node": "Validate Form Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Form Input": {
+      "main": [
+        [
+          {
+            "node": "Is Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Get Video MIME Type",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Text MIME Type",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show Input Validation Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Video MIME Type": {
+      "main": [
+        [
+          {
+            "node": "Namespace Video Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Namespace Video Metadata": {
+      "main": [
+        [
+          {
+            "node": "Append MIME Type Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Namespace Text Metadata": {
+      "main": [
+        [
+          {
+            "node": "Append MIME Type Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get Text MIME Type": {
+      "main": [
+        [
+          {
+            "node": "Namespace Text Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append MIME Type Results": {
+      "main": [
+        [
+          {
+            "node": "Validate MIME Types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate MIME Types": {
+      "main": [
+        [
+          {
+            "node": "Are MIME Types Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Are MIME Types Valid?": {
+      "main": [
+        [
+          {
+            "node": "Download Text File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Download Video File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show MIME Validation Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Video File": {
+      "main": [
+        [
+          {
+            "node": "Combine Input Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Text File": {
+      "main": [
+        [
+          {
+            "node": "Combine Input Files",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Combine Input Files": {
+      "main": [
+        [
+          {
+            "node": "Render with AutoLektor API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render with AutoLektor API": {
+      "main": [
+        [
+          {
+            "node": "Combine Result and Folder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Output Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Output Folder": {
+      "main": [
+        [
+          {
+            "node": "Combine Result and Folder",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Combine Result and Folder": {
+      "main": [
+        [
+          {
+            "node": "Upload Rendered File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Rendered File": {
+      "main": [
+        [
+          {
+            "node": "Send Result Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Result Email": {
+      "main": [
+        [
+          {
+            "node": "Show Success Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "9ca5dff5-4612-4542-922a-850dd06bbfe7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "515c562cc95ce0be72c2644780effa63717402a73f20a15a16e0f26040a5f7a9"
+  },
+  "nodeGroups": [],
+  "id": "f9KjecbOSB6gayQO",
+  "tags": []
+}

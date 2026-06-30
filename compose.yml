@@ -1,6 +1,27 @@
 name: n8n
 
 services:
+  autolektor-api:
+    profiles:
+      - autolektor
+
+    image: localhost/autolektor-api:cpu
+    restart: unless-stopped
+
+    environment:
+      AUTOLEKTOR_WHISPER_MODEL: ${AUTOLEKTOR_WHISPER_MODEL:-small}
+      AUTOLEKTOR_VOICE: ${AUTOLEKTOR_VOICE:-pl-PL-ZofiaNeural}
+      AUTOLEKTOR_TRANSCRIPTION_LANGUAGE: ${AUTOLEKTOR_TRANSCRIPTION_LANGUAGE:-pl}
+
+    ports:
+      - "127.0.0.1:${AUTOLEKTOR_PORT:-8000}:8000"
+
+    volumes:
+      - autolektor-whisper:/home/autolektor/.cache/whisper
+    
+    networks:
+      - app
+
   postgres:
     image: "postgres:${POSTGRES_VERSION:-18}-${POSTGRES_VARIANT:-bookworm}"
     restart: unless-stopped
@@ -117,6 +138,7 @@ services:
 volumes:
   postgres_data:
   n8n_data:
+  autolektor-whisper:
 
 networks:
   app:
